@@ -1,0 +1,29 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: polars-data-service
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/memory: "2Gi"
+        run.googleapis.com/cpu: "2"
+    spec:
+      containerConcurrency: 100
+      timeoutSeconds: 300
+      containers:
+      - image: gcr.io/YOUR_PROJECT_ID/polars-data-service
+        env:
+        - name: ENV
+          value: "production"
+        - name: ALLOWED_ORIGINS
+          value: "https://www.illutix.com,https://illutix.com"
+        resources:
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+        ports:
+        - containerPort: 8000
