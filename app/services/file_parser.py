@@ -1,33 +1,51 @@
 import polars as pl
 import json
 import logging
+import httpx
+import hashlib
+import tempfile
 from pathlib import Path
 from typing import Dict, Any, Optional
-from ..utils.fetch import download_file
+import asyncio
 from ..config import settings
 
 logger = logging.getLogger(__name__)
 
 class FileParser:
-    """Parse files from R2 signed URLs or local storage"""
+    """Polars-native file parsing with controlled disk usage"""
+    
+    # Controlled disk limits
+    PREVIEW_MAX_DOWNLOAD = 10 * 1024 * 1024   # 10MB for preview
+    FULL_MAX_DOWNLOAD = 100 * 1024 * 1024     # 100MB for full processing
+    CHUNK_SIZE = 8 * 1024 * 1024              # 8MB download chunks
     
     @staticmethod
-    async def parse_from_url(signed_url: str, file_format: str, preview: bool = False, limit: int = 1000) -> Dict[str, Any]:
-        """Parse file from signed URL"""
+    async def parse_from_url(
+        signed_url: str, 
+        file_format: str, 
+        preview: bool = False, 
+        limit: int = 1000
+    ) -> Dict[str, Any]:
+        """Parse file using Polars native methods with controlled temp storage"""
+        
         try:
-            # Download file to temp location
-            temp_path = await download_file(signed_url)
-            
-            # Parse based on format
-            result = FileParser._parse_file(temp_path, file_format, preview, limit)
-            
-            # Cleanup temp file
-            temp_path.unlink(missing_ok=True)
-            
-            return result
-            
+            if file_format in ["csv", "tsv"]:
+                return await FileParser._parse_csv_native(
+                    signed_url, file_format, preview, limit
+                )
+            elif file_format == "json":
+                return await FileParser._parse_json_native(
+                    signed_url, preview, limit
+                )
+            elif file_format == "geojson":
+                return await FileParser._parse_geojson_controlled(
+                    signed_url, preview, limit
+                )
+            else:
+                raise ValueError(f"Unsupported format: {file_format}")
+                
         except Exception as e:
-            logger.error(f"Error parsing file from URL {signed_url}: {str(e)}")
+            logger.error(f"Error parsing with Polars: {str(e)}")
             return {
                 "success": False,
                 "error": str(e),
@@ -36,15 +54,212 @@ class FileParser:
             }
     
     @staticmethod
+    async def _parse_csv_native(
+        url: str, 
+        file_format: str, 
+        preview: bool, 
+        limit: int
+    ) -> Dict[str, Any]:
+        """Use Polars scan_csv with streaming engine"""
+        
+        max_download = FileParser.PREVIEW_MAX_DOWNLOAD if preview else FileParser.FULL_MAX_DOWNLOAD
+        temp_path = await FileParser._download_controlled(url, max_download)
+        
+        try:
+            separator = '\t' if file_format == 'tsv' else ','
+            
+            # Build Polars query with lazy evaluation
+            query = pl.scan_csv(
+                temp_path,
+                separator=separator,
+                try_parse_dates=True,
+                null_values=["", "NULL", "null", "N/A", "n/a"],
+                ignore_errors=True,
+            )
+            
+            # Apply preview limit using Polars lazy operations
+            if preview:
+                query = query.head(limit)
+            elif limit and limit > 0:
+                query = query.head(limit)
+            
+            # Execute with Polars streaming engine
+            logger.info(f"Executing Polars query with streaming engine, preview={preview}, limit={limit}")
+            df = query.collect(streaming=True)
+            
+            return {
+                "success": True,
+                "data": df.to_dicts(),
+                "metadata": {
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": df.columns,
+                    "schema": {col: str(dtype) for col, dtype in zip(df.columns, df.dtypes)},
+                    "was_truncated": preview or (limit and len(df) == limit),
+                    "polars_streaming": True,
+                    "parsing_engine": "polars_native",
+                    "temp_file_size_mb": round(temp_path.stat().st_size / 1024 / 1024, 2),
+                    "file_format": file_format
+                }
+            }
+            
+        finally:
+            temp_path.unlink(missing_ok=True)
+            logger.info(f"Cleaned up temp file: {temp_path}")
+    
+    @staticmethod
+    async def _parse_json_native(
+        url: str, 
+        preview: bool, 
+        limit: int
+    ) -> Dict[str, Any]:
+        """Parse JSON with Polars native methods"""
+        
+        max_download = FileParser.PREVIEW_MAX_DOWNLOAD if preview else FileParser.FULL_MAX_DOWNLOAD
+        temp_path = await FileParser._download_controlled(url, max_download)
+        
+        try:
+            # Always use Polars native JSON reading
+            df = pl.read_json(temp_path)
+            
+            # Apply limits after reading
+            if preview and len(df) > limit:
+                df = df.head(limit)
+                was_truncated = True
+            else:
+                was_truncated = False
+            
+            return {
+                "success": True,
+                "data": df.to_dicts(),
+                "metadata": {
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": df.columns,
+                    "schema": {col: str(dtype) for col, dtype in zip(df.columns, df.dtypes)},
+                    "was_truncated": was_truncated,
+                    "polars_streaming": True,
+                    "parsing_engine": "polars_json",
+                    "temp_file_size_mb": round(temp_path.stat().st_size / 1024 / 1024, 2)
+                }
+            }
+                
+        finally:
+            temp_path.unlink(missing_ok=True)
+    
+    @staticmethod
+    async def _parse_geojson_controlled(
+        url: str, 
+        preview: bool, 
+        limit: int
+    ) -> Dict[str, Any]:
+        """Parse GeoJSON with controlled disk usage"""
+        
+        max_download = FileParser.PREVIEW_MAX_DOWNLOAD if preview else FileParser.FULL_MAX_DOWNLOAD
+        temp_path = await FileParser._download_controlled(url, max_download)
+        
+        try:
+            with open(temp_path, 'r') as f:
+                geo_data = json.load(f)
+            
+            business_data = FileParser._process_geojson_features(geo_data, preview, limit)
+            
+            if business_data:
+                df = pl.DataFrame(business_data)
+                return {
+                    "success": True,
+                    "data": df.to_dicts(),
+                    "metadata": {
+                        "row_count": len(df),
+                        "column_count": len([col for col in df.columns if not col.startswith('_')]),
+                        "columns": [col for col in df.columns if not col.startswith('_')],
+                        "schema": {col: str(dtype) for col, dtype in zip(df.columns, df.dtypes) if not col.startswith('_')},
+                        "was_truncated": preview and len(business_data) >= limit,
+                        "polars_streaming": True,
+                        "parsing_engine": "geo_geojson",
+                        "temp_file_size_mb": round(temp_path.stat().st_size / 1024 / 1024, 2),
+                        "geo_fields": ["_geometry"],
+                        "hidden_fields": [col for col in df.columns if col.startswith('_')]
+                    }
+                }
+            
+            return {
+                "success": True,
+                "data": [],
+                "metadata": {"row_count": 0, "column_count": 0, "polars_streaming": True}
+            }
+            
+        finally:
+            temp_path.unlink(missing_ok=True)
+    
+    @staticmethod
+    async def _download_controlled(url: str, max_bytes: int) -> Path:
+        """Download file with strict size limits to temp location"""
+        
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+        temp_dir = Path(tempfile.gettempdir()) / "polars_streaming"
+        temp_dir.mkdir(exist_ok=True)
+        temp_path = temp_dir / f"polars_{url_hash}.tmp"
+        
+        bytes_downloaded = 0
+        
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    
+                    # Check content-length header
+                    content_length = response.headers.get('content-length')
+                    if content_length and int(content_length) > max_bytes:
+                        raise ValueError(
+                            f"File too large: {int(content_length)/1024/1024:.1f}MB "
+                            f"exceeds limit of {max_bytes/1024/1024:.1f}MB"
+                        )
+                    
+                    with open(temp_path, "wb") as f:
+                        async for chunk in response.aiter_bytes(chunk_size=FileParser.CHUNK_SIZE):
+                            bytes_downloaded += len(chunk)
+                            
+                            # Enforce strict download limit
+                            if bytes_downloaded > max_bytes:
+                                remaining = max_bytes - (bytes_downloaded - len(chunk))
+                                if remaining > 0:
+                                    f.write(chunk[:remaining])
+                                break
+                            
+                            f.write(chunk)
+            
+            logger.info(f"Downloaded {bytes_downloaded/1024/1024:.2f}MB to {temp_path}")
+            return temp_path
+            
+        except Exception as e:
+            temp_path.unlink(missing_ok=True)
+            raise e
+    
+    @staticmethod
     def parse_local_file(datasource_id: str, preview: bool = False, limit: int = 1000) -> Dict[str, Any]:
-        """Parse local file (for development)"""
+        """Parse local file using Polars native methods"""
+        
         data_dir = Path(settings.DATA_DIR)
         
-        # Find file by trying different extensions
-        for ext in [".csv", ".json", ".tsv", ".geojson", ".topojson"]:
+        # Find file - removed topojson support
+        for ext in [".csv", ".json", ".tsv", ".geojson"]:
             file_path = data_dir / f"{datasource_id}{ext}"
             if file_path.exists():
-                return FileParser._parse_file(file_path, ext[1:], preview, limit)
+                
+                # Check file size
+                file_size = file_path.stat().st_size
+                max_size = FileParser.FULL_MAX_DOWNLOAD
+                
+                if file_size > max_size and not preview:
+                    return {
+                        "success": False,
+                        "error": f"Local file too large ({file_size/1024/1024:.1f}MB). Use preview mode.",
+                        "data": [],
+                        "metadata": {"row_count": 0, "column_count": 0}
+                    }
+                
+                return FileParser._parse_local_file_native(file_path, ext[1:], preview, limit)
         
         return {
             "success": False,
@@ -54,24 +269,63 @@ class FileParser:
         }
     
     @staticmethod
-    def _parse_file(file_path: Path, file_format: str, preview: bool, limit: int) -> Dict[str, Any]:
-        """Internal file parsing logic"""
+    def _parse_local_file_native(file_path: Path, file_format: str, preview: bool, limit: int) -> Dict[str, Any]:
+        """Parse local file with Polars native methods"""
+        
         try:
-            if file_format == "csv":
-                return FileParser._parse_csv(file_path, preview, limit)
-            elif file_format == "tsv":
-                return FileParser._parse_tsv(file_path, preview, limit)
+            if file_format in ["csv", "tsv"]:
+                separator = '\t' if file_format == 'tsv' else ','
+                
+                query = pl.scan_csv(
+                    file_path,
+                    separator=separator,
+                    try_parse_dates=True,
+                    null_values=["", "NULL", "null", "N/A", "n/a"],
+                    ignore_errors=True
+                )
+                
+                if preview:
+                    query = query.head(limit)
+                elif limit:
+                    query = query.head(limit)
+                
+                df = query.collect(streaming=True)
+                
             elif file_format == "json":
-                return FileParser._parse_json(file_path, preview, limit)
+                # Use Polars native JSON reading
+                df = pl.read_json(file_path)
+                
+                if preview and len(df) > limit:
+                    df = df.head(limit)
+            
             elif file_format == "geojson":
-                return FileParser._parse_geojson(file_path, preview, limit)
-            elif file_format == "topojson":
-                return FileParser._parse_topojson(file_path, preview, limit)
+                with open(file_path, 'r') as f:
+                    geo_data = json.load(f)
+                
+                business_data = FileParser._process_geojson_features(geo_data, preview, limit)
+                df = pl.DataFrame(business_data) if business_data else pl.DataFrame()
+            
             else:
                 raise ValueError(f"Unsupported format: {file_format}")
-                
+            
+            return {
+                "success": True,
+                "data": df.to_dicts(),
+                "metadata": {
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": df.columns,
+                    "schema": {col: str(dtype) for col, dtype in zip(df.columns, df.dtypes)},
+                    "was_truncated": preview and len(df) == limit,
+                    "polars_streaming": file_format in ["csv", "tsv"],
+                    "parsing_engine": f"polars_local_{file_format}",
+                    "local_file": True,
+                    "file_size_mb": round(file_path.stat().st_size / 1024 / 1024, 2)
+                }
+            }
+            
         except Exception as e:
-            logger.error(f"Error parsing {file_format} file {file_path}: {str(e)}")
+            logger.error(f"Error parsing local file {file_path}: {str(e)}")
             return {
                 "success": False,
                 "error": str(e),
@@ -80,75 +334,47 @@ class FileParser:
             }
     
     @staticmethod
-    def _parse_csv(file_path: Path, preview: bool, limit: int) -> Dict[str, Any]:
-        """Parse CSV file with Polars"""
-        df = pl.scan_csv(str(file_path))
-        
-        if preview:
-            df = df.head(limit)
-        
-        result_df = df.collect()
-        
-        return {
-            "success": True,
-            "data": result_df.to_dicts(),
-            "metadata": {
-                "row_count": len(result_df),
-                "column_count": len(result_df.columns),
-                "columns": result_df.columns,
-                "schema": {col: str(dtype) for col, dtype in zip(result_df.columns, result_df.dtypes)},
-                "was_truncated": preview and len(result_df) == limit
-            }
-        }
+    def extract_nested_data(data: Any, data_path: str) -> Any:
+        """Reusable function for nested path traversal"""
+        target_data = data
+        if data_path:
+            for part in data_path.split('.'):
+                if target_data and isinstance(target_data, dict) and part in target_data:
+                    target_data = target_data[part]
+                else:
+                    raise ValueError(f"Data path '{data_path}' not found in response")
+        return target_data
     
     @staticmethod
-    def _parse_tsv(file_path: Path, preview: bool, limit: int) -> Dict[str, Any]:
-        """Parse TSV file with Polars"""
-        df = pl.scan_csv(str(file_path), separator='\t')
+    def json_to_polars_via_temp(data: Any, preview: bool = False, limit: int = 1000) -> pl.DataFrame:
+        """Convert JSON data to Polars DataFrame via temp file for consistency"""
         
-        if preview:
-            df = df.head(limit)
+        # Create temp file for JSON data
+        temp_dir = Path(tempfile.gettempdir()) / "polars_streaming"
+        temp_dir.mkdir(exist_ok=True)
+        temp_path = temp_dir / f"json_data_{hash(str(data))}.json"
         
-        result_df = df.collect()
-        
-        return {
-            "success": True,
-            "data": result_df.to_dicts(),
-            "metadata": {
-                "row_count": len(result_df),
-                "column_count": len(result_df.columns),
-                "columns": result_df.columns,
-                "schema": {col: str(dtype) for col, dtype in zip(result_df.columns, result_df.dtypes)},
-                "was_truncated": preview and len(result_df) == limit
-            }
-        }
+        try:
+            # Write JSON data to temp file
+            with open(temp_path, 'w') as f:
+                json.dump(data, f)
+            
+            # Use Polars native JSON reading
+            df = pl.read_json(temp_path)
+            
+            # Apply limits
+            if preview and len(df) > limit:
+                df = df.head(limit)
+            
+            return df
+            
+        finally:
+            temp_path.unlink(missing_ok=True)
     
+    # GeoJSON processing helper methods
     @staticmethod
-    def _parse_json(file_path: Path, preview: bool, limit: int) -> Dict[str, Any]:
-        """Parse JSON file with Polars"""
-        df = pl.read_json(str(file_path))
-        
-        if preview:
-            df = df.head(limit)
-        
-        return {
-            "success": True,
-            "data": df.to_dicts(),
-            "metadata": {
-                "row_count": len(df),
-                "column_count": len(df.columns),
-                "columns": df.columns,
-                "schema": {col: str(dtype) for col, dtype in zip(df.columns, df.dtypes)},
-                "was_truncated": preview and len(df) == limit
-            }
-        }
-    
-    @staticmethod
-    def _parse_geojson(file_path: Path, preview: bool, limit: int) -> Dict[str, Any]:
-        """Parse GeoJSON with business transformation"""
-        with open(file_path, 'r') as f:
-            geo_data = json.load(f)
-        
+    def _process_geojson_features(geo_data: dict, preview: bool, limit: int) -> list:
+        """Process GeoJSON features into business data"""
         if geo_data.get("type") != "FeatureCollection":
             raise ValueError("Invalid GeoJSON: Expected FeatureCollection")
         
@@ -175,78 +401,8 @@ class FileParser:
             }
             business_data.append(row)
         
-        if business_data:
-            df = pl.DataFrame(business_data)
-            return {
-                "success": True,
-                "data": df.to_dicts(),
-                "metadata": {
-                    "row_count": len(df),
-                    "column_count": len([col for col in df.columns if not col.startswith('_')]),
-                    "columns": [col for col in df.columns if not col.startswith('_')],
-                    "schema": {col: str(dtype) for col, dtype in zip(df.columns, df.dtypes) if not col.startswith('_')},
-                    "was_truncated": preview and len(features) > limit,
-                    "geo_fields": ["_geometry"],
-                    "hidden_fields": [col for col in df.columns if col.startswith('_')]
-                }
-            }
-        
-        return {
-            "success": True,
-            "data": [],
-            "metadata": {"row_count": 0, "column_count": 0}
-        }
+        return business_data
     
-    @staticmethod
-    def _parse_topojson(file_path: Path, preview: bool, limit: int) -> Dict[str, Any]:
-        """Parse TopoJSON with business transformation"""
-        with open(file_path, 'r') as f:
-            topo_data = json.load(f)
-        
-        if topo_data.get("type") != "Topology":
-            raise ValueError("Invalid TopoJSON: Expected Topology")
-        
-        objects = topo_data.get("objects", {})
-        arcs = topo_data.get("arcs", [])
-        business_data = []
-        
-        for i, (name, obj) in enumerate(objects.items()):
-            if preview and i >= limit:
-                break
-                
-            row = {
-                "object_id": i + 1,
-                "object_name": name,
-                "feature_type": obj.get("type", "Unknown"),
-                "feature_count": len(obj.get("geometries", [])) if obj.get("geometries") else 1,
-                **(obj.get("properties", {})),
-                "_topology_object": obj,
-                "_arcs": arcs
-            }
-            business_data.append(row)
-        
-        if business_data:
-            df = pl.DataFrame(business_data)
-            return {
-                "success": True,
-                "data": df.to_dicts(),
-                "metadata": {
-                    "row_count": len(df),
-                    "column_count": len([col for col in df.columns if not col.startswith('_')]),
-                    "columns": [col for col in df.columns if not col.startswith('_')],
-                    "schema": {col: str(dtype) for col, dtype in zip(df.columns, df.dtypes) if not col.startswith('_')},
-                    "was_truncated": preview and len(objects) > limit,
-                    "hidden_fields": [col for col in df.columns if col.startswith('_')]
-                }
-            }
-        
-        return {
-            "success": True,
-            "data": [],
-            "metadata": {"row_count": 0, "column_count": 0}
-        }
-    
-    # Helper methods
     @staticmethod
     def _classify_geo_feature(geometry_type: str) -> str:
         mapping = {

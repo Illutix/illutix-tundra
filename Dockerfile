@@ -1,21 +1,34 @@
 FROM python:3.11-slim
 
+# Set working directory
 WORKDIR /app
 
-# Copy and install dependencies
+# Copy requirements first for better caching
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application
+# Copy application code
 COPY app/ ./app/
 
-# Create directories for temp files
-RUN mkdir -p /tmp/polars_server
+# Create temp directory for Polars streaming with proper permissions
+RUN mkdir -p /tmp/polars_streaming && \
+    chmod 755 /tmp/polars_streaming
+
+# Create non-root user for security
+RUN groupadd -r polars && useradd -r -g polars polars
+RUN chown -R polars:polars /tmp/polars_streaming
+
+USER polars
 
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/health')" || exit 1
+ENV PYTHONUNBUFFERED=1
+ENV POLARS_MAX_THREADS=4
+ENV TMPDIR=/tmp/polars_streaming
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

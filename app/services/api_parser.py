@@ -5,8 +5,17 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+import httpx
+import polars as pl
+import json
+import logging
+from typing import Dict, Any, Optional
+from .file_parser import FileParser
+
+logger = logging.getLogger(__name__)
+
 class ApiParser:
-    """Parse data from remote APIs"""
+    """Parse data from remote APIs using Polars native methods"""
     
     @staticmethod
     async def parse_api_data(
@@ -18,7 +27,7 @@ class ApiParser:
         preview: bool = False,
         limit: int = 1000
     ) -> Dict[str, Any]:
-        """Parse data from API endpoint"""
+        """Parse data from API endpoint using Polars native JSON processing"""
         
         try:
             # Build headers with authentication
@@ -34,36 +43,29 @@ class ApiParser:
                 response = await client.request(method, endpoint, headers=request_headers)
                 response.raise_for_status()
                 
-                # Check response size
-                if hasattr(response, 'headers') and 'content-length' in response.headers:
-                    size = int(response.headers['content-length'])
-                    if size > 50 * 1024 * 1024:  # 50MB limit
-                        raise ValueError("API response too large (exceeds 50MB)")
+                # Check response size using content-length header
+                content_length = response.headers.get('content-length')
+                if content_length and int(content_length) > 50 * 1024 * 1024:  # 50MB limit
+                    raise ValueError("API response too large (exceeds 50MB)")
                 
                 data = response.json()
             
-            # Navigate to target data using path
-            target_data = data
-            if data_path:
-                for part in data_path.split('.'):
-                    if target_data and isinstance(target_data, dict) and part in target_data:
-                        target_data = target_data[part]
-                    else:
-                        raise ValueError(f"Data path '{data_path}' not found in API response")
+            # Navigate to target data using reusable path traversal
+            target_data = FileParser.extract_nested_data(data, data_path)
             
             if not isinstance(target_data, list):
                 raise ValueError("API response is not an array. Check your data path configuration.")
             
-            # Apply preview limiting
+            # Apply preview limiting before Polars processing
             if preview and len(target_data) > limit:
                 target_data = target_data[:limit]
                 was_truncated = True
             else:
                 was_truncated = False
             
-            # Convert to DataFrame for consistency
+            # Use Polars native JSON processing via temp file
             if target_data:
-                df = pl.DataFrame(target_data)
+                df = FileParser.json_to_polars_via_temp(target_data, preview, limit)
                 return {
                     "success": True,
                     "data": df.to_dicts(),
@@ -72,14 +74,23 @@ class ApiParser:
                         "column_count": len(df.columns),
                         "columns": df.columns,
                         "schema": {col: str(dtype) for col, dtype in zip(df.columns, df.dtypes)},
-                        "was_truncated": was_truncated
+                        "was_truncated": was_truncated,
+                        "polars_streaming": True,
+                        "parsing_engine": "polars_api_json",
+                        "api_endpoint": endpoint,
+                        "data_path": data_path
                     }
                 }
             else:
                 return {
                     "success": True,
                     "data": [],
-                    "metadata": {"row_count": 0, "column_count": 0}
+                    "metadata": {
+                        "row_count": 0, 
+                        "column_count": 0,
+                        "polars_streaming": True,
+                        "parsing_engine": "polars_api_json"
+                    }
                 }
                 
         except Exception as e:
@@ -93,31 +104,39 @@ class ApiParser:
     
     @staticmethod
     def _add_auth_headers(headers: Dict[str, str], credentials: Dict[str, Any]) -> None:
-        """Add authentication headers based on credential type"""
+        """Add authentication headers with proper error handling"""
         cred_type = credentials.get("type")
         cred_value = credentials.get("value")
         
         if not cred_value:
+            logger.warning("Empty credential value provided")
             return
         
-        if cred_type == "bearer":
-            headers["Authorization"] = f"Bearer {cred_value}"
-        elif cred_type == "api-key":
-            try:
-                import json
-                parsed = json.loads(cred_value)
-                header_name = parsed.get("header", "X-API-Key")
-                headers[header_name] = parsed["apiKey"]
-            except (json.JSONDecodeError, KeyError):
-                headers["X-API-Key"] = cred_value
-        elif cred_type == "basic":
-            try:
-                import json
-                import base64
-                parsed = json.loads(cred_value)
-                username = parsed["username"]
-                password = parsed["password"]
-                encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
-                headers["Authorization"] = f"Basic {encoded}"
-            except (json.JSONDecodeError, KeyError):
-                headers["Authorization"] = f"Basic {cred_value}"
+        try:
+            if cred_type == "bearer":
+                headers["Authorization"] = f"Bearer {cred_value}"
+            elif cred_type == "api-key":
+                try:
+                    parsed = json.loads(cred_value)
+                    header_name = parsed.get("header", "X-API-Key")
+                    headers[header_name] = parsed["apiKey"]
+                except (json.JSONDecodeError, KeyError):
+                    # Fallback to simple API key
+                    headers["X-API-Key"] = cred_value
+            elif cred_type == "basic":
+                try:
+                    parsed = json.loads(cred_value)
+                    username = parsed["username"]
+                    password = parsed["password"]
+                    import base64
+                    encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
+                    headers["Authorization"] = f"Basic {encoded}"
+                except (json.JSONDecodeError, KeyError):
+                    # Assume the value is already base64 encoded
+                    headers["Authorization"] = f"Basic {cred_value}"
+            else:
+                logger.warning(f"Unknown credential type: {cred_type}")
+                
+        except Exception as e:
+            logger.error(f"Error processing credentials: {str(e)}")
+            # Don't fail the request due to auth issues, just log and continue
