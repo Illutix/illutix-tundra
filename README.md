@@ -25,23 +25,17 @@ mkdir data
 # Run the service
 uvicorn app.main:app --reload
 
-# Service available at http://localhost:8000
+# Service available at http://localhost:8080
 ```
 
 ### API Usage
 
 ```bash
 # Health check
-curl http://localhost:8000/health
-
-# List available datasets (dev)
-curl http://localhost:8000/datasources
-
-# Get preview data
-curl "http://localhost:8000/datasources/your-file/data?preview=true&limit=100"
+curl http://localhost:8080/health
 
 # Parse from signed URL
-curl -X POST "http://localhost:8000/parse/file" \
+curl -X POST "http://localhost:8080/parse/file" \
   -H "Content-Type: application/json" \
   -d '{
     "signed_url": "https://...",
@@ -51,7 +45,7 @@ curl -X POST "http://localhost:8000/parse/file" \
   }'
 
 # Parse API data
-curl -X POST "http://localhost:8000/parse/api" \
+curl -X POST "http://localhost:8080/parse/api" \
   -H "Content-Type: application/json" \
   -d '{
     "endpoint": "https://api.example.com/data",
@@ -61,7 +55,7 @@ curl -X POST "http://localhost:8000/parse/api" \
   }'
 
 # Execute SQL query
-curl -X POST "http://localhost:8000/parse/sql" \
+curl -X POST "http://localhost:8080/parse/sql" \
   -H "Content-Type: application/json" \
   -d '{
     "endpoint": "https://sql-api.example.com",
@@ -81,7 +75,7 @@ curl -X POST "http://localhost:8000/parse/sql" \
 docker build -t polars-data-service .
 
 # Run
-docker run -p 8000:8000 polars-data-service
+docker run -p 8080:8080 polars-data-service
 ```
 
 ### Google Cloud Run
@@ -98,7 +92,7 @@ gcloud run deploy polars-data-service --image gcr.io/$PROJECT_ID/polars-data-ser
 ## Environment Variables
 
 - `ENV`: `development` or `production`
-- `ALLOWED_ORIGINS`: List of allowed CORS origins (e.g., `["https://yourdomain.com","https://www.yourdomain.com"]`)
+- `ALLOWED_ORIGINS`: List of allowed CORS origins (e.g., `["https://illutix.com","https://www.illutix.com"]`)
 - `MAX_PREVIEW_ROWS`: Maximum rows for preview (default: 10000)
 - `DEFAULT_PREVIEW_ROWS`: Default preview size (default: 1000)
 
@@ -120,35 +114,3 @@ polars-server/
 ├── Dockerfile
 └── cloudrun.yaml           # Cloud Run deployment config
 ```
-
-## Integration with Next.js
-
-```typescript
-// Updated DataEngine for Polars service
-class DataEngine {
-    constructor(config) {
-        this.config = config;
-        this.baseUrl = process.env.NEXT_PUBLIC_POLARS_SERVICE_URL || 'http://localhost:8000';
-    }
-    
-    async load(options = {}) {
-        const endpoint = this.getEndpoint();
-        const body = this.buildRequestBody(options);
-        
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        
-        return await response.json();
-    }
-    
-    private getEndpoint() {
-        switch (this.config.type) {
-            case 'file': return `${this.baseUrl}/parse/file`;
-            case 'api': return `${this.baseUrl}/parse/api`;
-            case 'sql': return `${this.baseUrl}/parse/sql`;
-        }
-    }
-}
