@@ -17,10 +17,8 @@ RUN mkdir -p /tmp/polars_streaming && \
     chmod 755 /tmp/polars_streaming
 
 # Create non-root user for security
-RUN groupadd -r polars && useradd -r -g polars polars
-RUN chown -R polars:polars /tmp/polars_streaming
-
-USER polars
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8000
 

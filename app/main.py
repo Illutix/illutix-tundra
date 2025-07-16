@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from .config import settings
-from .models import ConversionRequest, ConversionResponse, HealthResponse
+from .models.conversionRequest import ConversionRequest, ConversionResponse, HealthResponse
 from .services.file_converter import FileConverter
 from .services.api_converter import ApiConverter  
 from .services.sql_converter import SqlConverter

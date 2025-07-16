@@ -5,7 +5,7 @@ import time
 import logging
 from io import BytesIO
 from typing import Dict, Any, Optional
-from ..models import ConversionMetadata
+from ..models.conversionRequest import ConversionMetadata
 
 logger = logging.getLogger(__name__)
 

@@ -111,13 +111,11 @@ polars-server/
 │   ├── config.py            # Environment configuration
 │   ├── models/              # Pydantic schemas
 │   │   └── parse.py
-│   ├── services/            # Core business logic
-│   │   ├── file_parser.py   # File processing with Polars
-│   │   ├── api_parser.py    # Remote API data fetching
-│   │   ├── sql_parser.py    # SQL query execution
-│   │   └── cleanup.py       # Temporary file cleanup
-│   └── utils/               # Shared utilities
-│       └── fetch.py         # File download helpers
+│   └── services/            # Core business logic
+│       ├── file_parser.py   # File processing with Polars
+│       ├── api_parser.py    # Remote API data fetching
+│       ├── sql_parser.py    # SQL query execution
+│       └── cleanup.py       # Temporary file cleanup
 ├── requirements.txt
 ├── Dockerfile
 └── cloudrun.yaml           # Cloud Run deployment config
