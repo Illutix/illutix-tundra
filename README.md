@@ -18,10 +18,6 @@ High-performance data processing service using Python + Polars for enterprise-sc
 # Install dependencies
 pip install -r requirements.txt
 
-# Create data directory and add test files
-mkdir data
-# Copy your data files to ./data/
-
 # Run the service
 uvicorn app.main:app --reload
 

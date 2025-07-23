@@ -16,7 +16,6 @@ class ConversionRequest(BaseModel):
     api_method: Optional[str] = Field("GET", description="HTTP method")
     api_headers: Optional[Dict[str, str]] = Field(None, description="Additional HTTP headers")
     api_data_path: Optional[str] = Field(None, description="JSON path to data array")
-    credentials_id: Optional[str] = Field(None, description="Stored credentials ID")
     
     # SQL conversion fields
     sql_endpoint: Optional[HttpUrl] = Field(None, description="SQL API endpoint")

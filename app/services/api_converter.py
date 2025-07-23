@@ -216,7 +216,7 @@ class ApiConverter:
             response = await client.put(
                 output_url,
                 content=parquet_data,
-                headers={"Content-Type": "application/octet-stream"}
+                headers={"Content-Type": "application/x-parquet"}
             )
             response.raise_for_status()
             

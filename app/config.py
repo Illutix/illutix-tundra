@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: List[str] = [
         "https://illutix.com",
         "https://www.illutix.com",
-        "https://app.illutix.com"
     ]
     
     # Processing limits for production safety

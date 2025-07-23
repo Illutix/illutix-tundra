@@ -35,7 +35,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=False,  # No credentials needed for conversion service
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -65,8 +65,8 @@ async def convert_file(request: ConversionRequest):
     
     try:
         result = await FileConverter.convert(
-            source_url=request.source_url,
-            output_url=request.output_url,
+            source_url=str(request.source_url),
+            output_url=str(request.output_url),
             file_format=request.format
         )
         
@@ -88,9 +88,8 @@ async def convert_api_data(request: ConversionRequest):
     
     try:
         result = await ApiConverter.convert(
-            endpoint=request.api_endpoint,
-            credentials_id=request.credentials_id,
-            output_url=request.output_url,
+            endpoint=str(request.api_endpoint),
+            output_url=str(request.output_url),
             method=request.api_method,
             headers=request.api_headers,
             data_path=request.api_data_path
@@ -114,11 +113,10 @@ async def convert_sql_data(request: ConversionRequest):
     
     try:
         result = await SqlConverter.convert(
-            endpoint=request.sql_endpoint,
+            endpoint=str(request.sql_endpoint),
             database=request.sql_database,
             query=request.sql_query,
-            credentials_id=request.credentials_id,
-            output_url=request.output_url
+            output_url=str(request.output_url)
         )
         
         if not result["success"]:
