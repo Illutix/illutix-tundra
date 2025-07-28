@@ -56,7 +56,7 @@ class ApiConverter:
             metadata = ConversionMetadata(
                 rows=len(df),
                 columns=len(df.columns),
-                schema=ApiConverter._generate_schema(df),
+                column_schema=ApiConverter._generate_schema(df),
                 file_size_mb=round(file_size_mb, 2),
                 processing_time_seconds=round(processing_time, 2),
                 source_type="api"
@@ -232,7 +232,7 @@ class ApiConverter:
             if col.startswith('_') and col != '_empty':
                 continue
                 
-            field_info = {
+            field_info: Dict[str, Any] = {
                 "name": col,
                 "type": str(dtype),
                 "polars_type": str(dtype)
@@ -242,7 +242,7 @@ class ApiConverter:
             try:
                 field_info["nullable"] = df.select(pl.col(col).is_null().any()).item()
             except:
-                field_info["nullable"] = True
+                    field_info["nullable"] = True
             
             fields.append(field_info)
         

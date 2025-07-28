@@ -56,7 +56,7 @@ class SqlConverter:
             metadata = ConversionMetadata(
                 rows=len(df),
                 columns=len(df.columns),
-                schema=SqlConverter._generate_schema(df),
+                column_schema=SqlConverter._generate_schema(df),
                 file_size_mb=round(file_size_mb, 2),
                 processing_time_seconds=round(processing_time, 2),
                 source_type="sql"
@@ -250,7 +250,7 @@ class SqlConverter:
             if col.startswith('_') and col != '_empty':
                 continue
                 
-            field_info = {
+            field_info: Dict[str, Any] = {
                 "name": col,
                 "type": str(dtype),
                 "polars_type": str(dtype)

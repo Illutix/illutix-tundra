@@ -1,0 +1,85 @@
+swagger: "2.0"
+info:
+  title: illutix-tundra-api
+  description: Supabase JWT secured data conversion service
+  version: 1.0.0
+
+schemes:
+  - https
+  
+x-google-backend:
+  address: https://illutix-tundra-ardycety5a-uc.a.run.app
+  protocol: h2
+  path_translation: APPEND_PATH_TO_ADDRESS
+
+paths:
+  /:
+    get:
+      operationId: root
+      security: []  # 🔓 No auth required
+      responses:
+        '200':
+          description: Root response
+  /health:
+    get:
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Health check response
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+              service:
+                type: string
+              version:
+                type: string
+  /convert/{proxy}:
+    get:
+      operationId: convertGetProxy
+      parameters:
+        - name: proxy
+          in: path
+          required: true
+          type: string
+      security:
+        - supabase_jwt: []
+      responses:
+        '200':
+          description: Proxy GET success
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+
+    post:
+      operationId: convertPostProxy
+      parameters:
+        - name: proxy
+          in: path
+          required: true
+          type: string
+        - name: body
+          in: body
+          required: false
+          schema:
+            type: object
+      security:
+        - supabase_jwt: []
+      responses:
+        '200':
+          description: Proxy POST success
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+          
+securityDefinitions:
+  supabase_jwt:
+    type: oauth2
+    flow: implicit
+    authorizationUrl: ""
+    x-google-issuer: https://tcfdohdxjkwbvmohumex.supabase.co/auth/v1
+    x-google-jwks_uri: https://tcfdohdxjkwbvmohumex.supabase.co/auth/v1/.well-known/jwks.json

@@ -48,7 +48,7 @@ class FileConverter:
             metadata = ConversionMetadata(
                 rows=len(df),
                 columns=len(df.columns),
-                schema=FileConverter._generate_schema(df),
+                column_schema=FileConverter._generate_schema(df),
                 file_size_mb=round(file_size_mb, 2),
                 processing_time_seconds=round(processing_time, 2),
                 source_type="file"

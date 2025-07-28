@@ -1,48 +1,54 @@
 from pydantic_settings import BaseSettings
+from pydantic import Field, HttpUrl
 from typing import List
 
 class Settings(BaseSettings):
-    """Production settings for Illutix Tundra conversion service"""
-    
+    """Settings for Illutix Tundra conversion service"""
+
+    # Runtime environment: 'dev', 'staging', or 'production'
+    ENV: str = Field(..., description="Environment: dev, staging, production")
+
     # Server configuration
     HOST: str = "0.0.0.0"
     PORT: int = 8080
-    ENV: str = "production"
-    
-    # CORS configuration for production
-    ALLOWED_ORIGINS: List[str] = [
-        "https://illutix.com",
-        "https://www.illutix.com",
-    ]
-    
-    # Processing limits for production safety
+
+    # Processing limits
     MAX_FILE_SIZE_MB: int = 500
     MAX_API_RESPONSE_MB: int = 100
     MAX_SQL_RESPONSE_MB: int = 100
     MAX_PROCESSING_TIME_MINUTES: int = 10
-    
-    # Memory and performance settings
+
+    # Performance
     MAX_MEMORY_USAGE_GB: int = 2
     MAX_CONCURRENT_CONVERSIONS: int = 5
-    
-    # Supported formats
+
+    # File formats
     SUPPORTED_FILE_FORMATS: List[str] = ["csv", "tsv", "json", "geojson"]
-    
-    # Parquet optimization settings
+
+    # Parquet
     PARQUET_COMPRESSION: str = "snappy"
     PARQUET_ROW_GROUP_SIZE: int = 50000
-    
-    # Default query limits for safety
-    DEFAULT_SQL_LIMIT: int = 100000
-    MAX_SQL_LIMIT: int = 1000000
-    
-    # Logging configuration
+
+    # SQL limits
+    DEFAULT_SQL_LIMIT: int = 100_000
+    MAX_SQL_LIMIT: int = 1_000_000
+
+    # Logging
     LOG_LEVEL: str = "INFO"
-    
+
     class Config:
-        case_sensitive = True
         env_file = ".env"
         env_file_encoding = "utf-8"
 
-# Create settings instance
-settings = Settings()
+    @property
+    def ALLOWED_ORIGINS(self) -> List[str]:
+        """Dynamically determine CORS origins based on environment"""
+        base = [
+            "https://illutix.com",
+            "https://www.illutix.com"
+        ]
+        if self.ENV != "production":
+            base.append("http://localhost:3000")
+        return base
+    
+settings = Settings() # type: ignore

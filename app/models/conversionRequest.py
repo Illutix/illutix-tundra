@@ -1,37 +1,47 @@
 from pydantic import BaseModel, Field, HttpUrl
 from typing import Any, Dict, List, Optional
+from enum import Enum
 
-class ConversionRequest(BaseModel):
-    """Unified request model for all conversion types"""
-    
-    # Required for all conversions
-    output_url: HttpUrl = Field(..., description="Signed PUT URL for parquet output")
-    
-    # File conversion fields
-    source_url: Optional[HttpUrl] = Field(None, description="Signed GET URL for source file")
-    format: Optional[str] = Field(None, description="Source file format (csv, json, tsv, geojson)")
-    
-    # API conversion fields  
-    api_endpoint: Optional[HttpUrl] = Field(None, description="API endpoint URL")
-    api_method: Optional[str] = Field("GET", description="HTTP method")
+class FileFormat(str, Enum):
+    csv = "csv"
+    json = "json"
+    tsv = "tsv"
+    geojson = "geojson"
+
+
+class HTTPMethod(str, Enum):
+    GET = "GET"
+    POST = "POST"
+    PUT = "PUT"
+    DELETE = "DELETE"
+
+class FileConversionRequest(BaseModel):
+    """Request model for file conversions"""
+    output_url: HttpUrl = Field(..., description="Signed PUT URL for Parquet output")
+    source_url: HttpUrl = Field(..., description="Signed GET URL for source file")
+    format: FileFormat = Field(..., description="Source file format (csv, json, tsv, geojson)")
+
+class ApiConversionRequest(BaseModel):
+    """Request model for API conversions"""
+    output_url: HttpUrl = Field(..., description="Signed PUT URL for Parquet output")
+    api_endpoint: HttpUrl = Field(..., description="API endpoint URL")
+    api_method: HTTPMethod = Field(HTTPMethod.GET, description="HTTP method")
     api_headers: Optional[Dict[str, str]] = Field(None, description="Additional HTTP headers")
     api_data_path: Optional[str] = Field(None, description="JSON path to data array")
-    
-    # SQL conversion fields
-    sql_endpoint: Optional[HttpUrl] = Field(None, description="SQL API endpoint")
-    sql_database: Optional[str] = Field(None, description="Database name")
-    sql_query: Optional[str] = Field(None, description="SQL query to execute")
-    
-    class Config:
-        json_encoders = {
-            HttpUrl: str
-        }
+
+class SqlConversionRequest(BaseModel):
+    """Request model for SQL conversions"""
+    output_url: HttpUrl = Field(..., description="Signed PUT URL for Parquet output")
+    sql_endpoint: HttpUrl = Field(..., description="SQL API endpoint")
+    sql_database: str = Field(..., description="Database name")
+    sql_query: str = Field(..., description="SQL query to execute")
+
 
 class ConversionMetadata(BaseModel):
     """Metadata about the converted dataset"""
     rows: int = Field(..., description="Number of rows in the dataset")
     columns: int = Field(..., description="Number of columns in the dataset")
-    schema: Dict[str, Any] = Field(..., description="Column schema information")
+    column_schema: Dict[str, Any] = Field(..., description="Column schema information")
     file_size_mb: float = Field(..., description="Output parquet file size in MB")
     processing_time_seconds: float = Field(..., description="Time taken to process")
     source_type: str = Field(..., description="Type of source data (file, api, sql)")

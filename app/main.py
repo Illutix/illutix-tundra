@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from .config import settings
-from .models.conversionRequest import ConversionRequest, ConversionResponse, HealthResponse
+from .models.conversionRequest import FileConversionRequest, ApiConversionRequest, SqlConversionRequest, ConversionResponse, HealthResponse
 from .services.file_converter import FileConverter
 from .services.api_converter import ApiConverter  
 from .services.sql_converter import SqlConverter
@@ -58,9 +58,10 @@ async def health_check():
     )
 
 @app.post("/convert/file", response_model=ConversionResponse)
-async def convert_file(request: ConversionRequest):
+async def convert_file(request: FileConversionRequest):
     """Convert file from R2 source to parquet format"""
-    
+    if request.format is None:
+        raise HTTPException(status_code=400, detail="`format` must be specified for file conversions.")
     logger.info(f"📄 Converting file: {request.format} → parquet")
     
     try:
@@ -81,7 +82,7 @@ async def convert_file(request: ConversionRequest):
         raise HTTPException(status_code=500, detail=f"Conversion failed: {str(e)}")
 
 @app.post("/convert/api", response_model=ConversionResponse)
-async def convert_api_data(request: ConversionRequest):
+async def convert_api_data(request: ApiConversionRequest):
     """Fetch data from API and convert to parquet format"""
     
     logger.info(f"🔗 Converting API data: {request.api_endpoint}")
@@ -106,7 +107,7 @@ async def convert_api_data(request: ConversionRequest):
         raise HTTPException(status_code=500, detail=f"API conversion failed: {str(e)}")
 
 @app.post("/convert/sql", response_model=ConversionResponse) 
-async def convert_sql_data(request: ConversionRequest):
+async def convert_sql_data(request: SqlConversionRequest):
     """Execute SQL query and convert results to parquet format"""
     
     logger.info(f"💾 Converting SQL data: {request.sql_database}")
