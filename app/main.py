@@ -2,8 +2,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
-from pathlib import Path
-
 from .config import settings
 from .models.conversionRequest import FileConversionRequest, ApiConversionRequest, SqlConversionRequest, ConversionResponse, HealthResponse
 from .services.file_converter import FileConverter
